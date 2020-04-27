@@ -30,3 +30,8 @@
 *.exe
 *.out
 *.app
+
+wificredentials.h
+*.db
+.pio
+.DS_Store

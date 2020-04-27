@@ -1,0 +1,15 @@
+body {
+    padding: 10px;
+}
+
+.slider.slider-horizontal {
+    width: 110px;
+    border-radius: 4px;
+ }
+
+ .inputfield {
+     border-bottom: 1px solid #ddd;
+     min-width: 10em;
+     min-height: 1em;
+     display: inline-block;
+ }

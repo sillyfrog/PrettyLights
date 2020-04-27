@@ -1,0 +1,1046 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+To test, run the following in the data directory:
+python3 -m http.server
+-->
+
+<head>
+  <meta charset="utf-8">
+  <title>LEGO Lights!</title>
+  <link rel="stylesheet" type="text/css"
+    href="https://cdn.datatables.net/v/bs4-4.1.1/jq-3.3.1/dt-1.10.20/sl-1.3.1/datatables.min.css" />
+  <script type="text/javascript"
+    src="https://cdn.datatables.net/v/bs4-4.1.1/jq-3.3.1/dt-1.10.20/sl-1.3.1/datatables.min.js"></script>
+
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-slider/10.6.0/bootstrap-slider.min.js"
+    integrity="sha256-G5ZTzV4wJSLf9AuZ3wMEJVZDp1MumYGrEw+JsAGHRXI=" crossorigin="anonymous"></script>
+  <link rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-slider/10.6.0/css/bootstrap-slider.min.css"
+    integrity="sha256-D25WHQReXOtVfJZu6lFdpu3ZN4kvVA7/+Af5mPjYlbw=" crossorigin="anonymous" />
+
+  <script src="jscolor.js"></script>
+  <link rel="stylesheet" href="style.css" />
+  <script>
+
+    COLOR_PICKER = 'cp';
+    DURATION = 'dur';
+
+    COLOR_UPDATE = "U\n";
+    SCHEME_UPDATE = "S\n";
+
+    RGB = "rgb";
+    PWM = "pwm";
+
+    LED_SCHEMES = {
+      "none": {
+        "start": {
+          "type": COLOR_PICKER,
+          "title": "Colour"
+        },
+      },
+      "fade": {
+        "start": {
+          "type": COLOR_PICKER,
+          "title": "Start Colour"
+        },
+        "end": {
+          "type": COLOR_PICKER,
+          "title": "End Colour"
+        },
+        "dur": {
+          "type": DURATION,
+          "title": "Duration to fade start-end-start"
+        }
+      },
+      "fadeoneway": {
+        "start": {
+          "type": COLOR_PICKER,
+          "title": "Start Colour"
+        },
+        "end": {
+          "type": COLOR_PICKER,
+          "title": "End Colour"
+        },
+        "dur": {
+          "type": DURATION,
+          "title": "Duration to fade from start-end"
+        }
+      },
+      "flicker": {
+        "start": {
+          "type": COLOR_PICKER,
+          "title": "Off Colour"
+        },
+        "dur": {
+          "type": DURATION,
+          "title": "Maximum random duration to remain Off"
+        },
+        "end": {
+          "type": COLOR_PICKER,
+          "title": "On Colour"
+        },
+        "altdur": {
+          "type": DURATION,
+          "title": "Maximum random duration to remain On"
+        }
+      },
+      "flash": {
+        "start": {
+          "type": COLOR_PICKER,
+          "title": "Off Colour"
+        },
+        "dur": {
+          "type": DURATION,
+          "title": "Duration to remain Off"
+        },
+        "end": {
+          "type": COLOR_PICKER,
+          "title": "On Colour"
+        },
+        "altdur": {
+          "type": DURATION,
+          "title": "Duration to remain On"
+        },
+        "cdwn": {
+          "type": DURATION,
+          "title": "Cool Down Duration, extra Off colour time"
+        }
+      }
+    }
+
+    const JSCOLOR_DEFAULTS = { "zIndex": 1060 };
+    var schemes = {};
+    var pwmschemes = {};
+    var databack = false;
+    var metadata = { RGB: {}, PWM: {} };
+    var forcecleartable = false;
+
+    var datatables = { 'rgb': null, 'pwm': null };
+
+    var bulkschemes = {};
+
+    function getActiveConfig() {
+      fetch('config').
+        then(function (response) {
+          return response.json();
+        })
+        .then(function (response) {
+          databack = response;
+        })
+        .then(updateTable)
+        .catch(error => console.error(error));
+    }
+
+    function sliderDrag(v) {
+      v.target.previousSibling.style.backgroundColor = backgroundForBrightness(v.value);
+    }
+
+    function backgroundForBrightness(val) {
+      var colorpcg = val / 4095 * 255;
+      var color = "rgb(" + colorpcg + "," + colorpcg + "," + colorpcg + ")"
+      return color;
+    }
+
+    function makeSlider(val = 2048) {
+      var span = $("<span style='margin-left: 0.5em;'></span>");
+      var input = $("<input style = 'max-width: 4em; margin-left: 0.5em;' />");
+      span.append(input);
+      var x = input.slider({ 'type': 'text', 'min': 0, 'max': 4095, 'step': 1, 'value': val })
+        .on("slide", sliderDrag)
+        .on("slideStop", sliderDrag);
+      x[0].previousSibling.style.backgroundColor = backgroundForBrightness(val);
+      input.show();
+      return span;
+    }
+
+    function startRefresh() {
+      // $("#somet").append(makeSlider('', 75));
+      fetch('schemes.txt').
+        then(function (response) {
+          return response.text();
+        })
+        .then(updateSchemes)
+        .catch(error => console.error(error));
+      getFile('stripdata.txt', function (response) {
+        document.getElementById("stripsizes").value = response;
+      });
+      getFile('pwmdata.txt', function (response) {
+        document.getElementById("pwmsizes").value = response;
+      });
+      startSocket();
+    }
+
+    function updateSchemes(data) {
+      lines = data.split('\n');
+      type = RGB;
+      for (line of lines) {
+        parts = line.split(':', 2);
+        if (parts[0] == PWM) {
+          type = PWM;
+        } else if (parts.length == 2) {
+          i = parseInt(parts[0]);
+          data = JSON.parse(line.substring(parts[0].length + 1));
+          if (type == RGB) {
+            schemes[i] = data;
+          } else {
+            pwmschemes[i] = data
+          }
+        }
+      }
+      getActiveConfig();
+      getMetaData();
+    }
+
+    function setColor(led, color) {
+      //var formData = new FormData();
+      //formData.append(led, color);
+
+      ws.send(COLOR_UPDATE + JSON.stringify({ "led": led, "color": color }));
+    }
+
+    function setScheme() {
+      document.getElementById("setschemebtn").innerText = "Saving...";
+      var schemedata = "";
+      for (i = 0; i < databack["colors"].length; i++) {
+        if (schemes[i]) {
+          schemedata += i + ":" + JSON.stringify(schemes[i]) + "\n";
+        }
+      }
+      schemedata += PWM + ":\n";
+      for (i = 0; i < databack["brightness"].length; i++) {
+        if (pwmschemes[i]) {
+          schemedata += i + ":" + JSON.stringify(pwmschemes[i]) + "\n";
+        }
+      }
+      console.log("Final data:", schemedata);
+      setFile("/schemes.txt", schemedata,
+        function () {
+          fetch('/updatescheme').
+            then(function (response) {
+              return response.text();
+            })
+            .then(function (resp) {
+              console.log("Update scheme:", resp);
+              document.getElementById("setschemebtn").style.display = "none";
+              document.getElementById("setschemebtn").innerText = "Save LED Schemes";
+            })
+            .then(function () {
+              setMetaData();
+            })
+            .catch(error => console.error("Update scheme error:", error));
+        });
+    }
+
+    function resetIdentifyButtons() {
+      $(".identify-btn").text("Identify");
+    }
+
+    var identifyTimer = null;
+    function identify() {
+      var btn = this;
+      fetch('/identify?led=' + btn.dataset.led + "&ledtype=" + btn.dataset.ledtype)
+        .then(function (response) {
+          return response.text();
+        })
+        .then(function (text) {
+          console.log("Response:", text);
+          if (identifyTimer) {
+            window.clearTimeout(identifyTimer);
+          }
+          resetIdentifyButtons();
+          if (text == "OK") {
+            btn.innerText = "Activated!";
+          }
+          else {
+            btn.innerText = "Error: " + text;
+          }
+          identifyTimer = window.setTimeout(resetIdentifyButtons, 10000);
+        }
+        )
+        .catch(error => console.error(error));
+    }
+
+    function editScheme(event) {
+      if (event.target) {
+        var elem = event.target;
+      } else {
+        var elem = event;
+      }
+      var e = document.createElement("td");
+      e.classList.add("scheme");
+      var led = myled(elem);
+
+      if (led.type == RGB) {
+        var scheme = schemes[led.led];
+      }
+      else if (led.type == PWM) {
+        var scheme = pwmschemes[led.led];
+      }
+      if (!scheme) {
+        scheme = { 'sc': 'none', 'start': '000000' };
+      }
+
+      var options = document.createElement("select");
+      options.classList.add("val");
+      for (var schemename in LED_SCHEMES) {
+        var opt = document.createElement("option");
+        opt.value = schemename;
+        opt.innerText = schemename;
+        if (schemename == scheme['sc']) {
+          opt.selected = true;
+        }
+        options.appendChild(opt);
+      }
+      options.name = "sc";
+      options.onchange = function () { newScheme(this); };
+      e.appendChild(options);
+      elem.parentNode.replaceWith(e);
+      // $(options).on("change", newScheme);
+      newScheme(options);
+    }
+
+    function newScheme(e) {
+      var led = myled(e);
+      // Remove all other child elements, then rebuild
+      while (e.nextSibling) {
+        e.nextSibling.remove();
+      }
+
+      var table = document.createElement("table");
+      table.classList.add("table");
+      table.classList.add("table-sm");
+      table.classList.add("table-striped");
+      table.classList.add("table-bordered");
+
+      if (led.type == RGB) {
+        var scheme = schemes[led.led];
+      }
+      else if (led.type == PWM) {
+        var scheme = pwmschemes[led.led];
+      }
+      if (!scheme) {
+        scheme = { 'sc': 'none', 'start': '000000' };
+      }
+
+      e.parentNode.appendChild(table);
+
+      schemecontrols = LED_SCHEMES[e.value];
+      for (var control in schemecontrols) {
+        var tr = table.insertRow(-1);
+        var td = document.createElement("td");
+        td.innerText = schemecontrols[control].title;
+        tr.appendChild(td);
+        type = schemecontrols[control].type;
+        var val = scheme[control];
+        if (type == COLOR_PICKER) {
+          if (led.type == RGB) {
+            var field = document.createElement('input');
+            field.name = control;
+            field.size = 8;
+            var picker = new jscolor(field, JSCOLOR_DEFAULTS);
+            if (!val) {
+              val = "000000";
+            }
+            picker.fromString(val);
+          }
+          else if (led.type == PWM) {
+            var field = makeSlider(val)[0];
+            field.name = control;
+            field.getValue = function (e) {
+              return this.lastElementChild.value;
+            }
+          }
+        }
+        else if (type == DURATION) {
+          var field = document.createElement('input');
+          field.type = "number";
+          field.step = "0.04";
+          field.min = 0;
+          field.name = control;
+          field.style.maxWidth = "4em";
+          if (val == undefined) {
+            val = "1000";
+          }
+          field.value = parseInt(val) / 1000;
+          field.getValue = function () {
+            return parseInt(parseFloat(this.value) * 1000);
+          }
+        }
+        else {
+          var field = document.createElement('p');
+          field.innerText = "Unknown type: " + control;
+        }
+        td = document.createElement("td");
+        field.classList.add("val");
+        td.appendChild(field);
+        tr.appendChild(td);
+      }
+      if (schemecontrols) {
+        var tr = table.insertRow(-1);
+        var td = document.createElement("td");
+        var btn = document.createElement('button');
+        td.colSpan = 2;
+        td.style.textAlign = "right";
+        btn.innerText = "Done";
+        btn.onclick = saveScheme;
+        td.appendChild(btn);
+        tr.appendChild(td);
+        $(btn).addClass("btn btn-sm btn-secondary done");
+      }
+    }
+
+    function saveScheme() {
+      var e = $(this).closest("td.scheme");
+      var led = myled(this);
+      var node = e.firstChild;
+      var scheme = {};
+      var nodes = e.find(".val");
+      for (var node of nodes) {
+        if (node.name) {
+          if (node.getValue) {
+            scheme[node.name] = node.getValue();
+          } else {
+            scheme[node.name] = node.value;
+          }
+        }
+      }
+
+      if (led.led < 0) {
+        // Special handling for bulk editing
+        bulkschemes[led.type] = scheme;
+      } else {
+        if (led.type == RGB) {
+          schemes[led.led] = scheme;
+        }
+        else if (led.type == PWM) {
+          pwmschemes[led.led] = scheme;
+        }
+        schemeCell(e, led.led, led.type);
+        try {
+          ws.send(SCHEME_UPDATE + led.led + "\n" + led.type + "\n" + JSON.stringify(scheme));
+          console.log("Sent Scheme via WS");
+        } catch (e) {
+          console.log("Sending via WS threw an error:", e);
+        }
+      }
+      schemeUpdated();
+    }
+
+    function titleUpdated(e) {
+      var title = e.value;
+      metadata['title'] = title;
+      document.title = "Lights! " + title;
+      schemeUpdated();
+    }
+
+    function schemeUpdated() {
+      document.getElementById("setschemebtn").style.display = "";
+    }
+
+    function brightness(c) {
+      // Returns brightnes, 0-203.975
+      if (c) {
+        var c = c.substring(1);      // strip #
+        var rgb = parseInt(c, 16);   // convert rrggbb to decimal
+        var r = (rgb >> 16) & 0xff;  // extract red
+        var g = (rgb >> 8) & 0xff;  // extract green
+        var b = (rgb >> 0) & 0xff;  // extract blue
+
+        var luma = 0.2126 * r + 0.7152 * g + 0.0722 * b; // per ITU-R BT.709
+
+        return luma;
+      } else {
+        return 200;
+      }
+    }
+
+    function schemeCell(oldcell, i, ledtype) {
+      var cell = document.createElement('td');
+      cell.classList.add("scheme");
+      var p = document.createElement('p');
+
+      if (ledtype == RGB) {
+        var schemedata = schemes;
+      }
+      else if (ledtype == PWM) {
+        var schemedata = pwmschemes;
+      } else {
+        console.error("Unknown type:", ledtype);
+        return;
+      }
+      var scheme = schemedata[i];
+      if (!scheme) {
+        scheme = { 'sc': 'none', 'start': '000000' };
+        schemedata[i] = scheme;
+      }
+
+      var html = '<p><b>' + scheme['sc'] + "</b><br/>";
+      var schemecontrols = LED_SCHEMES[scheme['sc']];
+      var donebr = false;
+      for (var control in schemecontrols) {
+        var type = schemecontrols[control].type;
+        var val = scheme[control];
+        if (type == COLOR_PICKER) {
+          if (ledtype == RGB) {
+            if (brightness(val) < 40) {
+              colsty = 'color: white;';
+            }
+            else {
+              colsty = 'color: black;';
+            }
+            html += '<span style="background-color: #' + val +
+              ';padding: 4px;border: black solid 1px;' + colsty + '">' + val + '</span>';
+          } else if (ledtype == PWM) {
+            val = parseInt(val);
+            if (val < 2045) {
+              colsty = 'color: white;';
+            }
+            else {
+              colsty = 'color: black;';
+            }
+            html += '<span style="background-color: ' + backgroundForBrightness(val) +
+              ';padding: 4px 0.5em;border: black solid 1px;' + colsty + '">' + val + '</span>';
+          }
+        }
+        else if (type == DURATION) {
+          if (!donebr) {
+            //html += '<br/>';
+          }
+          html += ' <span>' + val / 1000 + 's</span> ';
+        }
+        else {
+          html += "Unknown type: " + control;
+        }
+      }
+      html += '</p>';
+      p.innerHTML = html;
+
+      var button = document.createElement('button');
+      button.innerText = "Edit Scheme";
+      button.onclick = editScheme;
+      cell.appendChild(p);
+      cell.appendChild(button);
+      oldcell.replaceWith(cell);
+      $(button).addClass("btn btn-sm btn-secondary");
+    }
+
+    function getMetaData() {
+      getFile('/metadata.json', function (response) {
+        try {
+          metadata = JSON.parse(response);
+        } catch (e) {
+          metadata = {};
+        }
+        if (!metadata.lastchange) metadata.lastchange = new Date().toString();
+        if (!metadata[RGB]) metadata[RGB] = {};
+        if (!metadata[PWM]) metadata[PWM] = {};
+        forcecleartable = true;
+        updateTable();
+      });
+    }
+
+    function setMetaData() {
+      metadata.lastchange = new Date().toString();
+      setFile('/metadata.json', JSON.stringify(metadata));
+    }
+
+    function getFile(filename, callfunc) {
+      fetch(filename).
+        then(function (response) {
+          return response.text();
+        })
+        .then(function (response) {
+          callfunc(response);
+        })
+        .catch(error => console.error("Error getting file:", error));
+    }
+
+    function setFile(filename, datastr, completefunc) {
+      if (!completefunc) {
+        completefunc = function () { };
+      }
+      var formData = new FormData();
+      formData.append('data', new Blob([datastr]), filename);
+      fetch('/edit', {
+        method: "POST",
+        body: formData
+      })
+        .then(function (res) { console.log("setFile:", filename, res) })
+        .then(completefunc)
+        .catch(error => console.error("setFile Error:", error));
+    }
+
+    var saveledconfigremaining = 0;
+
+    function saveLEDposted() {
+      var msg = "Posting";
+      if (saveledconfigremaining > 0) {
+        for (var i; i < saveledconfigremaining; i++) {
+          msg += ".";
+        }
+      } else {
+        msg = "Please reboot now";
+      }
+      saveledconfigremaining--;
+      $("#savereboot").text(msg);
+    }
+
+    function saveLEDConfig() {
+      saveledconfigremaining = 2;
+      saveLEDposted();
+      saveSize("/stripdata.txt", document.getElementById("stripsizes").value);
+      saveSize("/pwmdata.txt", document.getElementById("pwmsizes").value);
+    }
+
+    function saveSize(filename, sizeinfo, endfunc) {
+      sizeinfo = sizeinfo.replace("\r", "");
+      if (sizeinfo.substring(sizeinfo.length - 1) != "\n") {
+        sizeinfo += "\n";
+      }
+      setFile(filename, sizeinfo, saveLEDposted);
+    }
+
+    function myled(e) {
+      // For a given element, returns the led id and type it's associated with
+      var tr = e.closest("tr.led");
+      var ret = { "led": parseInt(tr.dataset.led), "type": tr.dataset.type };
+      return ret;
+    }
+
+    function updateTable() {
+      if (!databack || !metadata.lastchange) {
+        console.log("Ain't got nothing... No table updates");
+        return;
+      }
+
+      for (var k of ["heap", "ssid", "version"]) {
+        document.getElementById(k).innerText = databack[k];
+      }
+      var title = metadata['title'];
+      if (title) {
+        document.title = "Lights! " + title;
+        document.getElementById("title").innerText = title;
+      }
+
+      for (ledtype of [RGB, PWM]) {
+        if (ledtype == RGB) {
+          var body = document.getElementById("rgbbody");
+          var activevals = databack['colors'];
+        } else {
+          var body = document.getElementById("pwmbody");
+          var activevals = databack['brightness'];
+        }
+        var i = 0;
+
+        if (forcecleartable) {
+          while (body.rows.length) {
+            body.rows[0].remove();
+          }
+        }
+
+        while (body.rows.length < activevals.length) {
+          var row = body.insertRow(-1);
+          row.dataset.led = i;
+          row.dataset.type = ledtype;
+          row.classList.add("led");
+          var cell = document.createElement('td');
+          cell.innerText = i;
+          row.appendChild(cell);
+
+          cell = row.insertCell(-1);
+          var field = document.createElement('input');
+          field.size = 8;
+          if (ledtype == RGB) {
+            var picker = new jscolor(field, JSCOLOR_DEFAULTS);
+            picker.fromString(activevals[i]);
+            field.onchange = function () {
+              var led = myled(this);
+              console.log("CHANGE", led.led, this.value);
+              setColor(led.led, this.value);
+            }
+          } else {
+            field.value = activevals[i];
+            field.style.backgroundColor = backgroundForBrightness(activevals[i]);
+            if (activevals[i] < 2048) {
+              field.style.color = "white";
+            }
+          }
+          cell.appendChild(field);
+
+          cell = row.insertCell(-1);
+          schemeCell(cell, i, ledtype);
+
+          cell = row.insertCell(-1);
+          var btn = document.createElement('button');
+          btn.classList.add("btn");
+          btn.classList.add("btn-sm");
+          btn.classList.add("btn-info");
+          btn.classList.add("identify-btn");
+          btn.onclick = identify;
+          btn.innerText = "Identify"
+          btn.dataset["led"] = i;
+          btn.dataset["ledtype"] = ledtype;
+          cell.append(btn);
+
+          cell = row.insertCell(-1);
+          field = document.createElement('span');
+          field.classList.add("inputfield");
+          field.dataset.editable = "";
+          var comment = ''
+          try {
+            comment = metadata[ledtype][i];
+          } catch (error) {
+          }
+          if (!comment) {
+            comment = '';
+          }
+          field.innerText = comment;
+          field.onchange = function () {
+            var led = myled(this);
+            metadata[led.type][led.led] = this.value;
+            schemeUpdated();
+          }
+          cell.append(field);
+
+          i++;
+        }
+      }
+      forcecleartable = false;
+      if (datatables.rgb == null) {
+        datatables.rgb = $("#rgbtable").DataTable({
+          "paging": false,
+          select: {
+            style: 'multi+shift'
+          }
+        });
+      }
+      if (datatables.pwm == null) {
+        datatables.pwm = $("#pwmtable").DataTable({
+          "paging": false,
+          select: {
+            style: 'multi+shift'
+          }
+        });
+      }
+    }
+
+    // Websocket Stuff
+    var ws = null;
+    function ge(s) { return document.getElementById(s); }
+    function ce(s) { return document.createElement(s); }
+    function sendBlob(str) {
+      var buf = new Uint8Array(str.length);
+      for (var i = 0; i < str.length; ++i) buf[i] = str.charCodeAt(i);
+      ws.send(buf);
+    }
+
+    function startSocket() {
+      ws = new WebSocket('ws://' + document.location.host + '/ws', ['lights']);
+      ws.binaryType = "arraybuffer";
+      ws.onopen = function (e) {
+        console.log("Connected");
+      };
+      ws.onclose = function (e) {
+        console.log("Disconnected, will reconnect in 2 second");
+        setTimeout(function () {
+          startSocket();
+        }, 2000);
+      };
+      ws.onerror = function (e) {
+        console.log("WS Error", e);
+        ws.close();
+      };
+      ws.onmessage = function (e) {
+        var msg = "";
+        if (e.data instanceof ArrayBuffer) {
+          msg = "BIN:";
+          var bytes = new Uint8Array(e.data);
+          for (var i = 0; i < bytes.length; i++) {
+            msg += String.fromCharCode(bytes[i]);
+          }
+        } else {
+          msg = "TXT:" + e.data;
+        }
+        console.log(msg);
+      };
+    }
+
+    function doRainbow() {
+      fetch('/rainbow')
+        .then(function (response) {
+          console.log("Doing rainbow!");
+        })
+        .catch(error => console.error(error));
+    }
+
+    function doTestMode(id) {
+      fetch('/testmode?id=' + id)
+        .then(function (response) {
+          return response.text();
+        })
+        .then(function (text) {
+          console.log("Test Mode Response:", text);
+          var b = document.getElementById("testmode");
+          if (text == "OFF") {
+            b.innerText = "Enter Test Mode";
+          }
+          else {
+            b.innerText = "Exit Test Mode";
+          }
+        }
+        )
+        .catch(error => console.error(error));
+    }
+
+    function cleanSize(e, maxlines, maxcount) {
+      var lines = e.value.split("\n");
+      var ret = [];
+      for (var line of lines) {
+        if (line) {
+          var asint = parseInt(line);
+          if (!asint || asint < 0) {
+            asint = 0;
+          }
+          if (asint > maxcount) {
+            asint = maxcount;
+          }
+          ret.push(asint);
+        }
+      }
+      while (ret.length > maxlines) {
+        ret.pop();
+      }
+      var strret = "";
+      for (var val of ret) {
+        strret += val.toString() + "\n";
+      }
+      e.value = strret;
+    }
+
+    function invalidaterow(e) {
+      // Finds the row for the given element, and invalidates that in the
+      // datatable to allow for accurate searching
+      var tr = e.closest("tr.led[data-led]");
+      datatables[tr.dataset.type].row(tr).invalidate();
+    }
+
+    function resetBulkEdit() {
+      // To include only rows that are displayed, add: search:'applied'
+      var rgbrows = datatables.rgb.rows({ selected: true }).data().length;
+      var pwmrows = datatables.pwm.rows({ selected: true }).data().length;
+      var bulktitle = document.getElementById("bulkcount");
+      if (rgbrows == 0 && pwmrows == 0) {
+        msg = "No rows selected!";
+        bulktitle.classList.add("text-danger");
+      } else {
+        var msg = "Updating " + rgbrows + " RGB LED's and " + pwmrows + " PWM LED's";
+        bulktitle.classList.remove("text-danger");
+      }
+      bulktitle.innerText = msg;
+      var e = document.getElementById("bulkrgbtd");
+      if (!e) {
+        // Table alread setup, exit
+        return;
+      }
+      editScheme(e.firstChild);
+      var e = document.getElementById("bulkpwmtd");
+      editScheme(e.firstChild);
+    }
+
+    function bulkSave() {
+      // Make sure the "Done" button is clicked
+      $("#bulkEdit").find("button.done").click();
+      // For each row save the respective scheme
+      for (var type of [RGB, PWM]) {
+        if (type == RGB) {
+          var updschemes = schemes;
+          var tr = document.getElementById("bulkrgbtr");
+        } else if (type == PWM) {
+          var updschemes = pwmschemes;
+          var tr = document.getElementById("bulkpwmtr");
+        }
+        var scheme = bulkschemes[type];
+        var nodes = datatables[type].rows({ selected: true }).nodes();
+        for (var i = 0; i < nodes.length; i++) {
+          var tr = nodes[i];
+          var led = myled(tr);
+          updschemes[led.led] = scheme;
+          // Redraw the cell
+          var cell = $(tr).find("td.scheme")[0];
+          schemeCell(cell, led.led, led.type);
+        }
+      }
+    }
+  </script>
+</head>
+
+<body onLoad="startRefresh();">
+  <h1>
+    Lego Lights: <span id="title" data-editable onchange="titleUpdated(this);">LEGO Lights!</span>
+  </h1>
+  <div class="modal fade" id="bulkEdit" tabindex="-1" role="dialog" aria-hidden="true">
+    <div class="modal-dialog" role="document">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Bulk Edit</h5>
+          <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+          </button>
+        </div>
+        <div class="modal-body">
+          <h5 id="bulkcount">...</h5>
+          <table class="table">
+            <tr data-led="-1" data-type="rgb" id="bulkrgbtr" class="led">
+              <th>RGB</th>
+              <td id="bulkrgbtd"><button>...</button></td>
+            </tr>
+            <tr data-led="-1" data-type="pwm" id="bulkpwmtr" class="led">
+              <th>PWM</th>
+              <td id="bulkpwmtd"><button>...</button></td>
+            </tr>
+          </table>
+
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+          <button type="button" class="btn btn-primary" onclick="bulkSave();">Save changes</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3 id="RGB">RGB LED's</h3>
+  <table class="table table-striped " id="rgbtable">
+    <thead>
+      <tr>
+        <th>LED</th>
+        <th>Colour</th>
+        <th>Scheme</th>
+        <th>Identify</th>
+        <th>Comment</th>
+      </tr>
+    </thead>
+    <tbody id="rgbbody">
+    </tbody>
+  </table>
+
+  <h3 id="PWM">PWM LED's</h3>
+  <table class="table table-striped " id="pwmtable">
+    <thead>
+      <tr>
+        <th>LED</th>
+        <th>Brightness</th>
+        <th>Scheme</th>
+        <th>Identify</th>
+        <th>Comment</th>
+      </tr>
+    </thead>
+    <tbody id="pwmbody">
+    </tbody>
+  </table>
+
+  <div style="position: fixed;top: 10px;right: 10px;">
+    <button type="button" class="btn btn-primary btn-sm" data-toggle="modal" data-target="#bulkEdit"
+      onclick="resetBulkEdit();">
+      Bulk Edit
+    </button>
+    <a href="#RGB" class="btn btn-sm btn-primary">RGB</a>
+    <a href="#PWM" class="btn btn-sm btn-primary">PWM</a>
+    <button onclick="setScheme();" class="btn btn-primary" style="display: none;" id="setschemebtn">Save State</button>
+  </div>
+  <p>&nbsp;</p>
+
+  <button onclick="doRainbow();" class="btn btn-success">Do Rainbow!</button>
+  <button onclick="doTestMode(1);" class="btn btn-info" id="testmode">Enter Test Mode 1</button>
+  <button onclick="doTestMode(2);" class="btn btn-info" id="testmode">Enter Test Mode 2</button>
+  <button onclick="doTestMode(3);" class="btn btn-info" id="testmode">Enter Test Mode 3</button>
+  <p>&nbsp;</p>
+  <div class="card mb-4 shadow-sm">
+    <div class="card-header">
+      <h4 class="my-0 font-weight-normal">LED Configuration</h4>
+    </div>
+    <div class="card-body">
+      <h4>RGB LED strips</h4>
+      <textarea id="stripsizes" onchange="cleanSize(this, 3, 60);">20</textarea>
+      <p>Count of LED per line, each line is a channel.</p>
+      <h4>PWM LED Boards</h4>
+      <textarea id="pwmsizes" onchange="cleanSize(this, 2, 4);">1</textarea>
+      <p>Number of PWM boards connected per channel. Each line is a channel with the board count.</p>
+      <p><button type="button" class="btn btn-primary" onclick="saveLEDConfig();" id="savereboot">Save (then manual
+          Reboot)</button></p>
+    </div>
+  </div>
+  <p>&nbsp;</p>
+  <div class="card mb-4 shadow-sm">
+    <div class="card-header">
+      <h4 class="my-0 font-weight-normal">Status</h4>
+    </div>
+    <div class="card-body">
+      <table class="table">
+        <tr>
+          <th>Version</th>
+          <td id="version"></td>
+        </tr>
+        <tr>
+          <th>Free Heap</th>
+          <td id="heap"></td>
+        </tr>
+        <tr>
+          <th>SSID</th>
+          <td id="ssid"></td>
+        </tr>
+      </table>
+    </div>
+  </div>
+  <div>
+  </div>
+  <div id="somet">
+  </div>
+  <script>
+    // started from https://stackoverflow.com/questions/33267797/turn-text-element-into-input-field-type-text-when-clicked-and-change-back-to-tex
+    function editableblur() {
+      var plain = this.parentNode.firstChild;
+      plain.style.display = "";
+      plain.innerText = this.value;
+      this.style.display = "none";
+      invalidaterow(this);
+    }
+
+    $('body').on('click', '[data-editable]', function () {
+      var e = this;
+      var parent = this.parentNode;
+      if (!parent.dataset.editableholder) {
+        var holder = document.createElement("span");
+        holder.dataset.editableholder = 1;
+        e.replaceWith(holder);
+        holder.appendChild(e);
+        e.style.display = "none";
+        var input = $('<input/>').val($(e).text());
+        // var save = function () {
+        //   console.log(this, parent, holder);
+        //   this.parent.firstChild.display = "";
+        //   this.display = "none";
+        //   // var $p = $('<span data-editable />').text($input.val());
+        //   // $input.replaceWith($p);
+        // };
+
+        $(holder).append(input);
+        input.on('blur', editableblur)
+        if (e.onchange) {
+          input.on('change', e.onchange);
+        }
+        input.focus();
+      } else {
+        var input = parent.lastElementChild;
+        input.style.display = "";
+        e.style.display = "none";
+        input.value = e.innerText;
+        input.focus();
+      }
+    });
+  </script>
+</body>
+
+</html>
