@@ -1,12 +1,16 @@
 # PrettyLights
 Configure and control RGB and LED lights from an ESP8266
 
-This is what I'm using to control the RGB (SK6812) LED's, and micro LED's (via a TLC5947 board).
+This code is what I'm using to control the RGB (SK6812) LED's, and micro LED's (via a TLC5947 board). See the UI in action here: https://youtu.be/EKk1sVc0KcM
 
-It's configured for a device with 4MB or more of flash. I use the Wemos D1 Mini (not D1 mini lite).
+See the final product in action here: https://youtu.be/e6nsncpYfj0
+
+## Hardware
+It's configured for a device with 4MB or more of flash. I use the Wemos D1 Mini (not D1 mini lite). SK6812 LEDs (from 2020 to 3535), and "micro litz" LED's (0402 - that's .4x.2mm - really small!) controlled by the TLC5947 control boards (many clones available of these).
 
 Everything is built using PlatformIO in VScode. Firstly create a `src/wificredentials.h` file with your WiFi setup.
 
+## Installation
 To install, do the initial build in VScode/PlatfromIO and upload via USB/Serial. Then upload the filesystem (PlatformIO: Upload filesystem image). Once this is done, you can browse to the IP address of the device. The first thing to configure is the number of RGB LED's and number of TLC5947 boards (PWM Boards).
 
 As of writing, it supports up to 3 separate strips of RGB LED's, and 2x chained TLC5947 boards. On the D1 mini, the RGB strips are connected to D1, D2 and D8 respectively. For the TLC5947 boards, the first board is connected to D5/D6/D7 (Din/CLK/LAT). These boards can be chained, so that's the recommended way. However if you need a second chain, this is connected to D5/D6/D3 (Din/CLK/LAT) - Din and CLK are shared. If using a TLC5947 board, I recommend joining the `LAT` and `/OE` pins to minimize noticeable flicker.
